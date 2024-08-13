@@ -26,7 +26,7 @@ Este é um aplicativo web interativo desenvolvido para ensinar e visualizar os c
 1. **Clone o Repositório**
 
    ```bash
-   git clone [https://github.com/seu-usuario/seu-repositorio.git](https://github.com/CalebeRezende/linefunctions)
+   git clone [(https://github.com/CalebeRezende/linefunctions)]
    cd seu-repositorio
    ```
 
