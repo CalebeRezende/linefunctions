@@ -57,7 +57,7 @@ Este projeto é de uso livre.
 
 ## **Contato**
 
-Para mais informações ou questões, entre em contato com [calebe.rezende@usp.br](mailto:ludimila.santos@usp.br).
+Para mais informações ou questões, entre em contato com [calebe.rezende@usp.br](mailto:ludimila.santos@usp.br) [ludimila.santos@usp.br](mailto:ludimila.santos@usp.br)..
 
 ---
 
