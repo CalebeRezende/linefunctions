@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Funções: Injetora, Sobrejetora e Bijetora</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+        }
+
+        canvas {
+            border: 1px solid black;
+            margin-top: 20px;
+        }
+
+        .button {
+            margin-top: 20px;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            background-color: white;
+            padding: 20px;
+            border: 1px solid #888;
+            z-index: 1000;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        .modal input {
+            width: 100%;
+            margin-top: 10px;
+            padding: 5px;
+        }
+
+        .modal button {
+            margin-top: 20px;
+            padding: 10px 20px;
+        }
+
+        .button-group {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <h1>Funções: Injetora, Sobrejetora e Bijetora</h1>
+    <div class="button-group">
+        <button id="addFunctionButton" class="button">Adicionar Função</button>
+        <button id="connectFunctionsButton" class="button">Conectar Funções</button>
+        <button id="clearCanvasButton" class="button">Limpar</button>
+        <button id="exportButton" class="button">Exportar para JSON</button>
+        <button id="importButton" class="button">Importar JSON</button>
+    </div>
+
+    <canvas id="functionCanvas" width="800" height="600"></canvas>
+
+    <div id="modal" class="modal">
+        <h2>Editar Função</h2>
+        <label for="functionType">Tipo de Função:</label>
+        <select id="functionType">
+            <option value="Injetora">Injetora</option>
+            <option value="Sobrejetora">Sobrejetora</option>
+            <option value="Bijetora">Bijetora</option>
+        </select>
+        <button id="saveFunctionButton">Salvar</button>
+        <button id="deleteFunctionButton" style="background-color: #f44336; color: white;">Apagar Função</button>
+    </div>
+
+    <script>
+        class FunctionBox {
+            constructor(id, x, y, type = 'Injetora') {
+                this.id = id;
+                this.x = x;
+                this.y = y;
+                this.width = 100;
+                this.height = 50;
+                this.type = type;
+                this.connections = [];
+            }
+
+            draw(context) {
+                context.beginPath();
+                context.rect(this.x, this.y, this.width, this.height);
+                context.stroke();
+                context.closePath();
+
+                context.fillText(this.id, this.x + this.width / 2 - 10, this.y + this.height / 2 - 10);
+                context.fillText(this.type, this.x + 10, this.y + this.height / 2 + 15);
+            }
+
+            updateType(newType) {
+                this.type = newType;
+            }
+
+            addConnection(func) {
+                this.connections.push(func);
+            }
+
+            toJSON() {
+                return {
+                    id: this.id,
+                    x: this.x,
+                    y: this.y,
+                    type: this.type,
+                    connections: this.connections.map(conn => conn.id)
+                };
+            }
+
+            static fromJSON(data) {
+                return new FunctionBox(data.id, data.x, data.y, data.type);
+            }
+        }
+
+        class Arrow {
+            constructor(startFunction, endFunction) {
+                this.startFunction = startFunction;
+                this.endFunction = endFunction;
+            }
+
+            draw(context) {
+                const startX = this.startFunction.x + this.startFunction.width;
+                const startY = this.startFunction.y + this.startFunction.height / 2;
+                const endX = this.endFunction.x;
+                const endY = this.endFunction.y + this.endFunction.height / 2;
+
+                context.beginPath();
+                context.moveTo(startX, startY);
+                context.lineTo(endX, endY);
+                context.stroke();
+                context.closePath();
+
+                this.drawArrowhead(context, startX, startY, endX, endY);
+            }
+
+            drawArrowhead(context, fromX, fromY, toX, toY) {
+                const headlen = 10;
+                const angle = Math.atan2(toY - fromY, toX - fromX);
+
+                context.beginPath();
+                context.moveTo(toX, toY);
+                context.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+                context.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
+                context.lineTo(toX, toY);
+                context.closePath();
+                context.fill();
+            }
+
+            toJSON() {
+                return {
+                    startFunction: this.startFunction.id,
+                    endFunction: this.endFunction.id
+                };
+            }
+
+            static fromJSON(data, functionMap) {
+                const startFunction = functionMap[data.startFunction];
+                const endFunction = functionMap[data.endFunction];
+                return new Arrow(startFunction, endFunction);
+            }
+        }
+
+        const functionCanvas = document.getElementById('functionCanvas');
+        const context = functionCanvas.getContext('2d');
+        const modal = document.getElementById('modal');
+        const functionTypeSelect = document.getElementById('functionType');
+        const saveFunctionButton = document.getElementById('saveFunctionButton');
+        const deleteFunctionButton = document.getElementById('deleteFunctionButton');
+        let functions = [];
+        let arrows = [];
+        let selectedFunction = null;
+        let draggingFunction = null;
+        let functionIdCounter = 1;
+
+        function drawCanvas() {
+            context.clearRect(0, 0, functionCanvas.width, functionCanvas.height);
+            arrows.forEach(arrow => arrow.draw(context));
+            functions.forEach(func => func.draw(context));
+        }
+
+        function addFunction(x, y) {
+            const func = new FunctionBox(`F${functionIdCounter++}`, x, y);
+            functions.push(func);
+            drawCanvas();
+            openModal(func);
+        }
+
+        function connectFunctions(x, y) {
+            const func = getFunctionAtPosition(x, y);
+
+            if (func && func !== selectedFunction) {
+                if (selectedFunction) {
+                    const arrow = new Arrow(selectedFunction, func);
+                    arrows.push(arrow);
+                    selectedFunction.addConnection(func);
+                    drawCanvas();
+                    selectedFunction = null;
+                }
+            } else if (func === selectedFunction) {
+                alert("Não é possível conectar uma função a si mesma.");
+            }
+        }
+
+        function getFunctionAtPosition(x, y) {
+            return functions.find(func => 
+                x >= func.x && x <= func.x + func.width && 
+                y >= func.y && y <= func.y + func.height);
+        }
+
+        function openModal(func) {
+            selectedFunction = func;
+            functionTypeSelect.value = func.type;
+            modal.style.display = 'block';
+        }
+
+        function closeModal() {
+            modal.style.display = 'none';
+            selectedFunction = null;
+        }
+
+        saveFunctionButton.addEventListener('click', function() {
+            selectedFunction.updateType(functionTypeSelect.value);
+            drawCanvas();
+            closeModal();
+        });
+
+        deleteFunctionButton.addEventListener('click', function() {
+            arrows = arrows.filter(arrow => arrow.startFunction !== selectedFunction && arrow.endFunction !== selectedFunction);
+            functions = functions.filter(func => func !== selectedFunction);
+            drawCanvas();
+            closeModal();
+        });
+
+        document.getElementById('addFunctionButton').addEventListener('click', function() {
+            functionCanvas.addEventListener('click', function onClick(event) {
+                const x = event.clientX - functionCanvas.offsetLeft;
+                const y = event.clientY - functionCanvas.offsetTop;
+                addFunction(x, y);
+                functionCanvas.removeEventListener('click', onClick);
+            });
+        });
+
+        document.getElementById('connectFunctionsButton').addEventListener('click', function() {
+            functionCanvas.addEventListener('click', function onClick(event) {
+                const x = event.clientX - functionCanvas.offsetLeft;
+                const y = event.clientY - functionCanvas.offsetTop;
+                const func = getFunctionAtPosition(x, y);
+
+                if (selectedFunction) {
+                    connectFunctions(x, y);
+                    functionCanvas.removeEventListener('click', onClick);
+                } else if (func) {
+                    selectedFunction = func;
+                }
+            });
+        });
+
+        functionCanvas.addEventListener('dblclick', function(event) {
+            const x = event.clientX - functionCanvas.offsetLeft;
+            const y = event.clientY - functionCanvas.offsetTop;
+            const func = getFunctionAtPosition(x, y);
+
+            if (func) {
+                openModal(func);
+            }
+        });
+
+        functionCanvas.addEventListener('mousedown', function(event) {
+            const x = event.clientX - functionCanvas.offsetLeft;
+            const y = event.clientY - functionCanvas.offsetTop;
+            const func = getFunctionAtPosition(x, y);
+            if (func) {
+                draggingFunction = func;
+            }
+        });
+
+        functionCanvas.addEventListener('mousemove', function(event) {
+            if (draggingFunction) {
+                const x = event.clientX - functionCanvas.offsetLeft;
+                const y = event.clientY - functionCanvas.offsetTop;
+                draggingFunction.x = x - draggingFunction.width / 2;
+                draggingFunction.y = y - draggingFunction.height / 2;
+                drawCanvas();
+            }
+        });
+
+        functionCanvas.addEventListener('mouseup', function() {
+            draggingFunction = null;
+        });
+
+        document.getElementById('clearCanvasButton').addEventListener('click', function() {
+            functions = [];
+            arrows = [];
+            drawCanvas();
+        });
+
+        document.getElementById('exportButton').addEventListener('click', function() {
+            const data = {
+                functions: functions.map(func => func.toJSON()),
+                arrows: arrows.map(arrow => arrow.toJSON())
+            };
+            const json = JSON.stringify(data, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'funcoes.json';
+            a.click();
+            URL.revokeObjectURL(url);
+        });
+
+        document.getElementById('importButton').addEventListener('click', function() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json';
+            input.addEventListener('change', function(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    const reader = new FileReader();
+                    reader.onload = function(e) {
+                        try {
+                            const data = JSON.parse(e.target.result);
+                            const functionMap = {};
+                            functions = data.functions.map(funcData => {
+                                const func = FunctionBox.fromJSON(funcData);
+                                functionMap[func.id] = func;
+                                return func;
+                            });
+                            arrows = data.arrows.map(arrowData => Arrow.fromJSON(arrowData, functionMap));
+                            functionIdCounter = functions.length + 1;
+                            drawCanvas();
+                        } catch (error) {
+                            alert('Erro ao importar o JSON: ' + error.message);
+                        }
+                    };
+                    reader.readAsText(file);
+                }
+            });
+            input.click();
+        });
+    </script>
+</body>
+</html>
