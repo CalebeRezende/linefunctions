@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Desenho de Círculos, Pontos Médios e Retas Infinitas</title>
+    <style>
+        canvas {
+            border: 1px solid black;
+        }
+        button {
+            margin: 5px;
+        }
+        .status {
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <h2>Novo iGeom - Em desenvolvimento</h2>
+    <div class="status" id="statusMessage">Selecione dois pontos para desenhar</div>
+    
+    <!-- Botões para selecionar o modo -->
+    <button id="midPointBtn">Desenhar Ponto Médio</button>
+    <button id="circleBtn">Desenhar Círculo</button>
+    <button id="lineBtn">Desenhar Reta Infinita</button>
+    <button id="noDrawBtn">Nenhuma Ação (Apenas Arrasto)</button>
+    <button id="clearSelectionBtn">Limpar Seleção</button>
+
+    <!-- Botões para controle de ações -->
+    <button id="undoBtn">Voltar um Passo</button>
+    <button id="redoBtn">Refazer um Passo</button>
+    <button id="resetBtn">Reiniciar Desenho</button>
+    
+    <button id="exportBtn">Exportar Desenho</button>
+    <input type="file" id="importFile" accept=".igeom">
+
+    <canvas id="canvas" width="600" height="400"></canvas>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        let points = [];
+        let midPoints = [];
+        let circles = [];
+        let lines = [];
+        let selectedPoints = [];
+        let pointLabels = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+        let labelIndex = 0;
+        const statusMessage = document.getElementById('statusMessage');
+        let draggingPoint = null;
+        let mode = 'none'; // Modo padrão: nenhuma ação
+        let history = [];
+        let redoStack = [];
+        let hoverPoint = null; // Para verificar o ponto sobre o qual o mouse está passando
+        let selectedPoint = null; // Ponto selecionado atual
+        let adjustingAngle = false; // Flag para controlar o estado de ajuste de ângulo
+
+        const MAX_HISTORY_SIZE = 100;  // Limite de tamanho do histórico
+
+        // Botões para selecionar o modo
+        document.getElementById('midPointBtn').addEventListener('click', () => {
+            mode = 'midPoint';
+            statusMessage.textContent = 'Modo selecionado: Desenhar Ponto Médio. Selecione dois pontos.';
+        });
+
+        document.getElementById('circleBtn').addEventListener('click', () => {
+            mode = 'circle';
+            statusMessage.textContent = 'Modo selecionado: Desenhar Círculo. Selecione dois pontos.';
+        });
+
+        document.getElementById('lineBtn').addEventListener('click', () => {
+            mode = 'line';
+            statusMessage.textContent = 'Modo selecionado: Desenhar Reta Infinita. Selecione dois pontos.';
+        });
+
+        document.getElementById('noDrawBtn').addEventListener('click', () => {
+            mode = 'none';
+            statusMessage.textContent = 'Modo selecionado: Nenhuma Ação (Apenas Arrasto)';
+        });
+
+        document.getElementById('clearSelectionBtn').addEventListener('click', () => {
+            selectedPoints = [];
+            selectedPoint = null;
+            statusMessage.textContent = 'Seleção de pontos limpa. Selecione novos pontos.';
+        });
+
+        // Botões de controle de ações
+        document.getElementById('undoBtn').addEventListener('click', undo);
+        document.getElementById('redoBtn').addEventListener('click', redo);
+        document.getElementById('resetBtn').addEventListener('click', resetCanvas);
+
+        canvas.addEventListener('mousedown', onMouseDown);
+        canvas.addEventListener('mouseup', onMouseUp);
+        canvas.addEventListener('mousemove', onMouseMove);
+        canvas.addEventListener('click', onClick);  // Clique simples para seleção
+
+        // Função para adicionar um novo ponto ao canvas
+        function addPoint(x, y) {
+    // Verifica se estamos ajustando o ângulo e impede a adição de pontos
+    if (adjustingAngle) {
+        return; // Não adiciona pontos se estamos ajustando o ângulo
+    }
+
+    // Adiciona apenas um ponto
+    const newPoint = { x, y, label: pointLabels[labelIndex++] };
+    points.push(newPoint);
+    statusMessage.textContent = `Ponto ${newPoint.label} criado. Selecione dois pontos para desenhar.`;
+    saveState(); // Salva o estado após adicionar um novo ponto
+    draw(); // Redesenha o canvas após adicionar o ponto
+}
+
+        function onMouseDown(e) {
+            const { x, y } = getMousePos(e);
+            draggingPoint = findPoint(x, y);
+        }
+
+        function onMouseUp() {
+            draggingPoint = null; // Finaliza o movimento de um ponto
+        }
+        
+        canvas.addEventListener('click', function(e) {
+    const { x, y } = getMousePos(e);
+    const clickedAngle = findClickedAngle(x, y);
+
+    if (clickedAngle) {
+        adjustingAngle = true; // Ativa a flag durante o ajuste do ângulo
+        const newAngle = prompt('Digite o novo ângulo em graus:');
+        if (newAngle !== null && !isNaN(newAngle)) {
+            adjustLineToAngle(clickedAngle.line1, clickedAngle.line2, parseFloat(newAngle), clickedAngle.intersection);
+        }
+        adjustingAngle = false; // Desativa a flag após o ajuste do ângulo
+        return;
+    }
+
+    //addPoint(x, y); // Se não estamos ajustando o ângulo, adiciona um ponto normalmente
+});
+
+
+        function onMouseMove(e) {
+            const { x, y } = getMousePos(e);
+            hoverPoint = findPoint(x, y); // Verifica se o mouse está sobre um ponto
+            
+            if (draggingPoint) {
+                draggingPoint.x = x;
+                draggingPoint.y = y;
+
+                // Atualiza o círculo, as linhas e os pontos médios relacionados ao ponto movido
+                updateMidPoints();
+                updateCircles();
+                updateLines();
+                draw(); // Redesenha o canvas
+            } else {
+                draw(); // Redesenha o canvas para exibir as informações de hover
+            }
+        }
+
+        // Função chamada quando há um clique simples no canvas
+        function onClick(e) {
+            const { x, y } = getMousePos(e);
+            const clickedPoint = findPoint(x, y);
+
+            if (!clickedPoint) {
+                addPoint(x, y);
+                return;
+            }
+
+            // Se o ponto já está selecionado, desmarcar
+            if (clickedPoint === selectedPoint) {
+                selectedPoint = null;
+                statusMessage.textContent = 'Ponto desmarcado. Selecione outro ponto.';
+                return;
+            }
+
+            // Caso contrário, selecionar o novo ponto
+            selectedPoint = clickedPoint;
+            statusMessage.textContent = `Ponto ${selectedPoint.label} está selecionado. Clique no ponto novamente para desmarcar.`;
+
+            // Para desenhar círculos, linhas ou pontos médios
+            if (mode === 'circle' && selectedPoints.length === 1) {
+                circles.push({ center: selectedPoints[0], circumference: selectedPoint });
+                statusMessage.textContent = `Círculo criado com o ponto ${selectedPoints[0].label} como centro e ${selectedPoint.label} na circunferência.`;
+                saveState(); // Salva o estado após criar um círculo
+                selectedPoints = [];
+                draw();
+            } else if (mode === 'midPoint' && selectedPoints.length === 1) {
+                addMidPointBetween(selectedPoints[0], selectedPoint);
+                statusMessage.textContent = `Ponto médio criado entre ${selectedPoints[0].label} e ${selectedPoint.label}.`;
+                saveState(); // Salva o estado após criar um ponto médio
+                selectedPoints = [];
+                draw();
+            } else if (mode === 'line' && selectedPoints.length === 1) {
+                lines.push({ point1: selectedPoints[0], point2: selectedPoint });
+                statusMessage.textContent = `Reta infinita criada entre ${selectedPoints[0].label} e ${selectedPoint.label}.`;
+                saveState(); // Salva o estado após criar uma reta infinita
+                selectedPoints = [];
+                draw();
+            } else {
+                selectedPoints.push(selectedPoint);
+            }
+        }
+
+        // Função para verificar se há um ponto próximo da posição do clique
+        function findPoint(x, y) {
+            return points.concat(midPoints).find(p => Math.hypot(p.x - x, p.y - y) < 10); // Retorna o ponto se ele estiver próximo ao clique
+        }
+
+        // Função para obter a posição do mouse no canvas
+        function getMousePos(e) {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        }
+        
+        
+
+        // Função para desenhar o canvas
+        let angles = []; // Array que armazena os ângulos e suas posições
+
+function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height); // Limpa o canvas antes de redesenhar
+
+    // Desenha os pontos
+    points.forEach(point => drawCircle(point.x, point.y, 'blue', point.label));
+
+    // Desenha os pontos médios
+    midPoints.forEach(point => {
+        drawCircle(point.x, point.y, 'red', point.label);
+        if (hoverPoint === point) {
+            const parentLabels = point.parents.map(p => p.label).join('');
+            ctx.fillStyle = 'black';
+            ctx.fillText(`Mid${parentLabels}`, point.x + 8, point.y + 8); // Mostra 'MidXY' no ponto médio
+        }
+    });
+
+    // Desenha os círculos
+    circles.forEach(circle => drawCircleOutline(circle.center, circle.circumference));
+
+    // Desenha as retas infinitas
+    lines.forEach(line => drawInfiniteLine(line.point1, line.point2));
+
+    // Limpa os ângulos anteriores
+    angles = [];
+
+    // Verifica interseções entre as retas e calcula ângulos
+    for (let i = 0; i < lines.length; i++) {
+        for (let j = i + 1; j < lines.length; j++) {
+            const intersection = findIntersection(lines[i], lines[j]);
+            if (intersection) {
+                const angle = calculateAngle(lines[i], lines[j]);
+                drawCircle(intersection.x, intersection.y, 'green', ''); // Ponto de interseção
+                ctx.fillStyle = 'black';
+                ctx.fillText(`${angle.toFixed(2)}°`, intersection.x + 10, intersection.y - 10); // Exibe o ângulo
+
+                // Armazena os ângulos para interação
+                angles.push({
+                    angle: angle,
+                    x: intersection.x + 10,
+                    y: intersection.y - 10,
+                    line1: lines[i],
+                    line2: lines[j],
+                    intersection: intersection
+                });
+
+                // Desenha o arco para o ângulo
+                drawAngleArc(intersection, lines[i], lines[j], 20); // Desenha o arco com raio 20
+            }
+        }
+    }
+}
+
+        // Função para desenhar os círculos (pontos)
+        function drawCircle(x, y, color, label) {
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = color;
+            ctx.fill();
+            ctx.closePath();
+            ctx.font = '12px Arial';
+            ctx.fillStyle = 'black';
+            ctx.fillText(label, x + 8, y - 8);
+        }
+
+        // Função para desenhar o contorno de um círculo
+        function drawCircleOutline(center, circumferencePoint) {
+            const radius = Math.hypot(center.x - circumferencePoint.x, center.y - circumferencePoint.y);
+            ctx.beginPath();
+            ctx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'black';
+            ctx.stroke();
+        }
+
+        // Função para desenhar um ponto médio entre dois pontos
+        function addMidPointBetween(point1, point2) {
+            const midX = (point1.x + point2.x) / 2;
+            const midY = (point1.y + point2.y) / 2;
+
+            let midPoint = midPoints.find(p => p.x === midX && p.y === midY);
+            if (!midPoint) {
+                midPoint = {
+                    x: midX,
+                    y: midY,
+                    isMidPoint: true,
+                    parents: [point1, point2],
+                    label: pointLabels[labelIndex++]
+                };
+                midPoints.push(midPoint);
+            } else {
+                midPoint.parents = [point1, point2];
+            }
+        }
+
+        // Função para desenhar uma reta infinita
+        function drawInfiniteLine(point1, point2) {
+            const canvasWidth = canvas.width;
+            const canvasHeight = canvas.height;
+
+            // Calcula o coeficiente angular da reta
+            const dx = point2.x - point1.x;
+            const dy = point2.y - point1.y;
+
+            // Extensão da linha além dos limites do canvas
+            const lengthFactor = 10000;
+
+            const startX = point1.x - dx * lengthFactor;
+            const startY = point1.y - dy * lengthFactor;
+            const endX = point2.x + dx * lengthFactor;
+            const endY = point2.y + dy * lengthFactor;
+
+            ctx.beginPath();
+            ctx.moveTo(startX, startY);
+            ctx.lineTo(endX, endY);
+            ctx.strokeStyle = 'green';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        }
+        
+        function findIntersection(line1, line2) {
+    		const { x: x1, y: y1 } = line1.point1;
+    		const { x: x2, y: y2 } = line1.point2;
+    		const { x: x3, y: y3 } = line2.point1;
+    		const { x: x4, y: y4 } = line2.point2;
+
+    		const denom = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    		if (denom === 0) return null; // As linhas são paralelas
+
+    		const intersectX = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / denom;
+    		const intersectY = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / denom;
+
+    		return { x: intersectX, y: intersectY };
+	}
+	
+	function calculateAngle(line1, line2) {
+    		const vector1 = { x: line1.point2.x - line1.point1.x, y: line1.point2.y - line1.point1.y };
+    		const vector2 = { x: line2.point2.x - line2.point1.x, y: line2.point2.y - line2.point1.y };
+
+    		const dotProduct = vector1.x * vector2.x + vector1.y * vector2.y;
+    		const magnitude1 = Math.hypot(vector1.x, vector1.y);
+    		const magnitude2 = Math.hypot(vector2.x, vector2.y);
+
+    		const angleRadians = Math.acos(dotProduct / (magnitude1 * magnitude2));
+    		const angleDegrees = angleRadians * (180 / Math.PI);
+    
+    		return angleDegrees;
+	}
+	
+	function findClickedAngle(mouseX, mouseY) {
+    // Verifica se o clique está próximo de um ângulo exibido
+    for (let i = 0; i < angles.length; i++) {
+        const angle = angles[i];
+        const dist = Math.hypot(angle.x - mouseX, angle.y - mouseY); // Calcula a distância do clique ao ângulo
+        if (dist < 10) { // Considera um raio de 10px em torno do ângulo exibido
+            return angle; // Retorna o ângulo clicado
+        }
+    }
+    return null; // Se não encontrou um ângulo próximo, retorna null
+}
+	
+	function drawAngleArc(center, line1, line2, radius) {
+    const vector1 = { x: line1.point2.x - line1.point1.x, y: line1.point2.y - line1.point1.y };
+    const vector2 = { x: line2.point2.x - line2.point1.x, y: line2.point2.y - line2.point1.y };
+
+    // Calcula os ângulos das retas em relação ao eixo x
+    const angle1 = Math.atan2(vector1.y, vector1.x);
+    const angle2 = Math.atan2(vector2.y, vector2.x);
+
+    // Determina o menor e o maior ângulo entre as retas para desenhar o arco corretamente
+    const startAngle = Math.min(angle1, angle2);
+    const endAngle = Math.max(angle1, angle2);
+
+    // Verifica se o ângulo é maior que 180 graus e ajusta para o arco menor
+    if (endAngle - startAngle > Math.PI) {
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, radius, endAngle, startAngle + 2 * Math.PI);  // Arco maior
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    } else {
+        // Desenha o arco para o ângulo entre as retas
+        ctx.beginPath();
+        ctx.arc(center.x, center.y, radius, startAngle, endAngle);  // Arco menor
+        ctx.strokeStyle = 'blue';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+}
+
+
+
+        // Função para atualizar os pontos médios quando os pontos pais forem movidos
+        function updateMidPoints() {
+            midPoints.forEach(midPoint => {
+                const parent1 = midPoint.parents[0];
+                const parent2 = midPoint.parents[1];
+                midPoint.x = (parent1.x + parent2.x) / 2;
+                midPoint.y = (parent1.y + parent2.y) / 2;
+            });
+        }
+
+        // Função para atualizar os círculos quando os pontos que os definem forem movidos
+        function updateCircles() {
+            circles.forEach(circle => {
+                const center = circle.center;
+                const circumferencePoint = circle.circumference;
+                drawCircleOutline(center, circumferencePoint);
+            });
+        }
+
+        // Função para atualizar as retas infinitas quando os pontos que as definem forem movidos
+        function updateLines() {
+            lines.forEach(line => {
+                drawInfiniteLine(line.point1, line.point2);
+            });
+        }
+        
+        function adjustLineToAngle(line1, line2, desiredAngle, intersection) {
+    const dx1 = line1.point2.x - line1.point1.x;
+    const dy1 = line1.point2.y - line1.point1.y;
+
+    // Ângulo da primeira reta
+    const angle1 = Math.atan2(dy1, dx1);
+
+    // Novo ângulo desejado
+    const newAngleRadians = desiredAngle * (Math.PI / 180);
+
+    // Mantém o comprimento original da reta
+    const length2 = Math.hypot(line2.point2.x - line2.point1.x, line2.point2.y - line2.point1.y);
+
+    // Calcula o novo vetor da segunda reta com o ângulo ajustado
+    const dx2 = Math.cos(angle1 + newAngleRadians) * length2;
+    const dy2 = Math.sin(angle1 + newAngleRadians) * length2;
+
+    // Reposiciona o segundo ponto da segunda reta para ajustar o ângulo
+    line2.point2.x = intersection.x + dx2;
+    line2.point2.y = intersection.y + dy2;
+
+    // Redesenha o canvas com os novos valores
+    draw();
+}
+
+        // Função para salvar o estado atual para desfazer/refazer
+        function saveState() {
+            history.push({
+                points: JSON.parse(JSON.stringify(points)),
+                midPoints: JSON.parse(JSON.stringify(midPoints)),
+                circles: JSON.parse(JSON.stringify(circles)),
+                lines: JSON.parse(JSON.stringify(lines))
+            });
+            
+            // Limitar o tamanho do histórico
+            if (history.length > MAX_HISTORY_SIZE) {
+                history.shift();  // Remove o estado mais antigo
+            }
+            
+            redoStack = []; // Limpa a pilha de refazer ao salvar um novo estado
+        }
+
+        // Função para desfazer a última ação
+        function undo() {
+            if (history.length > 0) {
+                redoStack.push({
+                    points: JSON.parse(JSON.stringify(points)),
+                    midPoints: JSON.parse(JSON.stringify(midPoints)),
+                    circles: JSON.parse(JSON.stringify(circles)),
+                    lines: JSON.parse(JSON.stringify(lines))
+                });
+                const lastState = history.pop();
+                points = lastState.points;
+                midPoints = lastState.midPoints;
+                circles = lastState.circles;
+                lines = lastState.lines;
+                draw();
+            }
+        }
+
+        // Função para refazer a última ação desfeita
+        function redo() {
+            if (redoStack.length > 0) {
+                saveState();
+                const nextState = redoStack.pop();
+                points = nextState.points;
+                midPoints = nextState.midPoints;
+                circles = nextState.circles;
+                lines = nextState.lines;
+                draw();
+            }
+        }
+
+        // Função para resetar o canvas
+        function resetCanvas() {
+            points = [];
+            midPoints = [];
+            circles = [];
+            lines = [];
+            labelIndex = 0;
+            statusMessage.textContent = "Selecione dois pontos para desenhar";
+            draw();
+        }
+        
+        document.getElementById('exportBtn').addEventListener('click', exportDrawing);
+
+function exportDrawing() {
+    const data = {
+        points,
+        midPoints,
+        circles,
+        lines
+    };
+
+    const jsonData = JSON.stringify(data, null, 2);  // Cria o JSON formatado
+    const blob = new Blob([jsonData], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'desenho.igeom';  // Define o nome e extensão do arquivo
+    link.click();
+    URL.revokeObjectURL(url);  // Libera o objeto URL após o uso
+}
+
+document.getElementById('importFile').addEventListener('change', importDrawing);
+
+function importDrawing(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        const content = event.target.result;
+        try {
+            const data = JSON.parse(content);
+
+            // Restaura os dados dos pontos, pontos médios, círculos e retas
+            points = data.points || [];
+            midPoints = data.midPoints || [];
+            circles = data.circles || [];
+            lines = data.lines || [];
+
+            // Atualiza o rótulo dos pontos
+            labelIndex = points.length;
+
+            // Mapeia os pontos pelo rótulo para facilitar a restauração de relações
+            const pointMap = {};
+            points.forEach(p => {
+                pointMap[p.label] = p;
+            });
+
+            // Restaura as relações de "parents" dos pontos médios
+            midPoints.forEach(midPoint => {
+                midPoint.parents = midPoint.parents.map(parent => pointMap[parent.label]);
+                pointMap[midPoint.label] = midPoint; // Adiciona os pontos médios ao map
+            });
+
+            // Restaura as relações dos círculos (centro e ponto de circunferência)
+            circles.forEach(circle => {
+                circle.center = pointMap[circle.center.label];
+                circle.circumference = pointMap[circle.circumference.label];
+            });
+
+            // Restaura as relações das retas infinitas (ponto1 e ponto2)
+            lines.forEach(line => {
+                line.point1 = pointMap[line.point1.label];
+                line.point2 = pointMap[line.point2.label];
+            });
+
+            draw();  // Redesenha o canvas com os dados importados
+            statusMessage.textContent = 'Desenho importado com sucesso!';
+        } catch (error) {
+            console.error("Erro ao importar o arquivo:", error);
+            statusMessage.textContent = 'Erro ao importar o arquivo.';
+        }
+    };
+
+    reader.readAsText(file);
+}
+
+
+        draw(); // Desenha o canvas inicialmente
+    </script>
+</body>
+</html>
+
